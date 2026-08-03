@@ -128,8 +128,8 @@ slot and rescheduling a cancelled appointment).
 
 - **Deploy target:** [Render](https://render.com) — Docker-based Web Service +
   managed PostgreSQL instance.
-- **Public URL:** _add here after deploying, e.g.
-  `https://clinic-booking-api.onrender.com`_
+- **Public URL:** _add here after deploying, the deployed project is at.
+  `https://savanna-clinic-booking.onrender.com`_
 - **Which branch triggers a deployment:** `main`. Render's own auto-deploy
   (redeploy on every push to `main`) is disabled in favor of the GitHub
   Actions pipeline below, so a deploy only happens *after* tests pass — not
