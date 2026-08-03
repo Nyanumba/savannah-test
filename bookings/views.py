@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework import status
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from .models import Appointment, Doctor, Patient
 from .serializers import (
@@ -33,8 +33,20 @@ def _error_response(exc: BookingError):
     return Response({"detail": exc.message, "code": exc.code}, status=http_status)
 
 
-class DoctorAvailabilityView(APIView):
-    """GET /doctors/{id}/availability?date=YYYY-MM-DD"""
+# All views below inherit from GenericAPIView (rather than plain APIView) and
+# set `serializer_class`, purely so DRF's Browsable API can introspect the
+# serializer and render a proper HTML form (with dropdowns for FK fields
+# like doctor/patient) at each endpoint's URL in a browser - not just raw
+# JSON input. This lets anyone test the full CRUD flow - create, cancel,
+# reschedule, list - from a browser with no Postman/curl required.
+
+
+class DoctorAvailabilityView(GenericAPIView):
+    """GET /doctors/{id}/availability?date=YYYY-MM-DD
+
+    Visit this URL directly in a browser (with a doctor id and ?date=...)
+    to see the JSON response rendered by DRF's browsable UI.
+    """
 
     def get(self, request, doctor_id):
         doctor = get_object_or_404(Doctor, id=doctor_id)
@@ -64,11 +76,18 @@ class DoctorAvailabilityView(APIView):
         )
 
 
-class AppointmentCreateView(APIView):
-    """POST /appointments"""
+class AppointmentCreateView(GenericAPIView):
+    """POST /appointments
+
+    Browsable API: open this URL in a browser and DRF renders an HTML
+    form with a doctor dropdown, patient dropdown, and start_time field -
+    fill it in and submit to book, right from the browser.
+    """
+
+    serializer_class = AppointmentCreateSerializer
 
     def post(self, request):
-        serializer = AppointmentCreateSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         doctor = serializer.validated_data["doctor"]
@@ -93,12 +112,17 @@ class AppointmentCreateView(APIView):
         return Response(AppointmentSerializer(appointment).data, status=status.HTTP_201_CREATED)
 
 
-class AppointmentCancelView(APIView):
-    """PATCH /appointments/{id}/cancel"""
+class AppointmentCancelView(GenericAPIView):
+    """PATCH /appointments/{id}/cancel
+
+    Browsable API renders a form with just a `reason` text field.
+    """
+
+    serializer_class = AppointmentCancelSerializer
 
     def patch(self, request, appointment_id):
         appointment = get_object_or_404(Appointment, id=appointment_id)
-        serializer = AppointmentCancelSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         if appointment.status == Appointment.STATUS_CANCELLED:
@@ -113,12 +137,17 @@ class AppointmentCancelView(APIView):
         return Response(AppointmentSerializer(appointment).data)
 
 
-class AppointmentRescheduleView(APIView):
-    """PATCH /appointments/{id}/reschedule"""
+class AppointmentRescheduleView(GenericAPIView):
+    """PATCH /appointments/{id}/reschedule
+
+    Browsable API renders a form with just a `start_time` field.
+    """
+
+    serializer_class = AppointmentRescheduleSerializer
 
     def patch(self, request, appointment_id):
         appointment = get_object_or_404(Appointment, id=appointment_id)
-        serializer = AppointmentRescheduleSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         if appointment.status == Appointment.STATUS_CANCELLED:
@@ -149,8 +178,10 @@ class AppointmentRescheduleView(APIView):
         return Response(AppointmentSerializer(appointment).data)
 
 
-class PatientAppointmentsView(APIView):
+class PatientAppointmentsView(GenericAPIView):
     """GET /patients/{id}/appointments - bonus endpoint."""
+
+    serializer_class = AppointmentSerializer
 
     def get(self, request, patient_id):
         patient = get_object_or_404(Patient, id=patient_id)
@@ -159,4 +190,4 @@ class PatientAppointmentsView(APIView):
             status=Appointment.STATUS_BOOKED,
             start_time__gte=timezone.now(),
         ).order_by("start_time")
-        return Response(AppointmentSerializer(appointments, many=True).data)
+        return Response(self.get_serializer(appointments, many=True).data)
