@@ -126,32 +126,91 @@ slot and rescheduling a cancelled appointment).
 
 ## Section 3 — Deployment & CI/CD
 
-- **Deploy target:** Render (Docker-based web service + managed
-  PostgreSQL). Any Docker-friendly host (Fly.io, Railway, Azure) works the
-  same way since deployment is just `docker build` + `docker run` against
-  the `Dockerfile` in this repo.
-- **Public URL:** _add after deploying — see steps below._
-- **Pipeline:** `.github/workflows/ci-cd.yml`
-  - On every PR into `main`: spins up a Postgres service container, installs
-    dependencies, runs `python manage.py test`.
-  - On every push/merge into `main`: after tests pass, hits Render's deploy
-    hook (`RENDER_DEPLOY_HOOK` repo secret) to trigger a redeploy. `main` is
-    the designated deploy branch.
+- **Deploy target:** [Render](https://render.com) — Docker-based Web Service +
+  managed PostgreSQL instance.
+- **Public URL:** _add here after deploying, e.g.
+  `https://clinic-booking-api.onrender.com`_
+- **Which branch triggers a deployment:** `main`. Render's own auto-deploy
+  (redeploy on every push to `main`) is disabled in favor of the GitHub
+  Actions pipeline below, so a deploy only happens *after* tests pass — not
+  on every push regardless of test outcome.
+- **What the pipeline does** (`.github/workflows/ci-cd.yml`):
+  - **On every PR into `main`:** spins up a throwaway Postgres service
+    container in the CI runner and runs `python manage.py test` against it.
+  - **On every push/merge into `main`:** after tests pass, calls Render's
+    deploy hook URL (`RENDER_DEPLOY_HOOK` GitHub secret) to trigger a
+    redeploy of the web service.
 
-### Deploying to Render (or similar)
+### Deploying to Render — step by step
 
-1. Push this repo to GitHub.
-2. Create a Render PostgreSQL instance; note its internal host/port/db/user/password.
-3. Create a Render Web Service from the repo, Docker runtime (uses this
-   `Dockerfile` as-is).
-4. Set environment variables on the service: `SECRET_KEY`, `DEBUG=False`,
-   `ALLOWED_HOSTS=<your-render-domain>`, `DB_HOST`, `DB_NAME`, `DB_USER`,
-   `DB_PASSWORD`, `DB_PORT` (from step 2).
-5. Copy the service's deploy hook URL into a GitHub Actions secret named
-   `RENDER_DEPLOY_HOOK`.
-6. Merge to `main` — CI runs tests, then calls the deploy hook.
+**1. Push the repo to GitHub** (Render deploys from a connected repo).
 
----
+**2. Create the Postgres database first**
+- Render dashboard → **New +** → **PostgreSQL**
+- Name it (e.g. `clinic-booking-db`), pick a plan, create it
+- Once provisioned, open it and note the connection details under
+  **Connections** — internal host, port, database name, user, password
+
+**3. Create the Web Service**
+- **New +** → **Web Service** → connect the GitHub repo
+- Runtime: **Docker** (Render detects and uses the `Dockerfile` in this
+  repo automatically — no build command needed)
+- Region: same as the database, to keep latency low
+- Instance type: free tier is enough for this assessment
+
+**4. Set environment variables on the Web Service**
+Web Service → **Environment** tab → add each of these. This is the only
+place these values live in production — none of them are ever written to
+a file in the repo:
+
+| Key | Value |
+|---|---|
+| `SECRET_KEY` | a freshly generated random string (not the dev default in `settings.py`) |
+| `DEBUG` | `False` |
+| `ALLOWED_HOSTS` | your Render domain, e.g. `clinic-booking-api.onrender.com` |
+| `DB_HOST` | from the database's Connections tab (internal host) |
+| `DB_NAME` | from the database's Connections tab |
+| `DB_USER` | from the database's Connections tab |
+| `DB_PASSWORD` | from the database's Connections tab |
+| `DB_PORT` | `5432` |
+
+**5. Deploy**
+- Render builds the Docker image and, per the `Dockerfile`'s `CMD`, runs
+  `python manage.py migrate` then starts `gunicorn` automatically — no
+  separate manual migration step needed on first deploy
+- Watch the build/deploy logs; once the service shows **Live**, open the
+  URL — e.g. `https://<your-app>.onrender.com/api/appointments`
+
+**6. Wire up the GitHub Actions deploy hook**
+- Web Service → **Settings** → **Deploy Hook** → copy the URL
+- GitHub repo → **Settings** → **Secrets and variables** → **Actions** →
+  **New repository secret**
+- Name: `RENDER_DEPLOY_HOOK`, value: the copied URL
+- From now on, every merge into `main` runs the test suite first, and only
+  calls this hook (triggering a Render redeploy) if the tests pass
+
+**7. (Optional) Seed demo data on the live instance**
+- Render Web Service → **Shell** tab (or `render exec`) →
+  `python manage.py seed_demo_data`
+
+### Testing the API without Postman
+
+Every endpoint is browsable directly — open the URLs in any browser (local
+or the deployed Render URL) and DRF's browsable API renders an HTML page:
+
+- `GET /api/doctors/1/availability?date=2026-08-10` — shows the JSON response.
+- `GET /api/appointments` — shows a form with a doctor dropdown, patient
+  dropdown, and a start_time field; fill it in and click **POST** to book,
+  right from the page. No request-body JSON to hand-write.
+- `PATCH /api/appointments/{id}/cancel` — form with just a `reason` field.
+- `PATCH /api/appointments/{id}/reschedule` — form with just a `start_time`
+  field.
+- `GET /api/patients/{id}/appointments` — shows the JSON list.
+
+This was a deliberate design choice, not just a DRF default: the assessment
+brief doesn't say what tool the reviewer will test with, so every endpoint
+supports full CRUD from nothing but a browser, in addition to
+curl/Postman/any HTTP client.
 
 ## Section 4 — AI Reflection
 
