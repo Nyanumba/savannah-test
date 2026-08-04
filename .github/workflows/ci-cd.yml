@@ -58,4 +58,9 @@ jobs:
         env:
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is not set (or is empty)."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
           curl -fsS "$RENDER_DEPLOY_HOOK"
