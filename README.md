@@ -94,18 +94,68 @@ status:
 | `outside_working_hours` | 422 |
 | `slot_taken`, `already_cancelled` | 409 |
 
+### Endpoints — local vs. deployed
+
+| # | Method | Local | Deployed (Render) |
+|---|---|---|---|
+| 1 | `POST` | `http://localhost:8000/api/appointments` | `https://savanna-clinic-booking.onrender.com/api/appointments` |
+| 2 | `GET` | `http://localhost:8000/api/doctors/{id}/availability?date=YYYY-MM-DD` | `https://savanna-clinic-booking.onrender.com/api/doctors/{id}/availability?date=YYYY-MM-DD` |
+| 3 | `PATCH` | `http://localhost:8000/api/appointments/{id}/cancel` | `https://savanna-clinic-booking.onrender.com/api/appointments/{id}/cancel` |
+| 4 | `PATCH` | `http://localhost:8000/api/appointments/{id}/reschedule` | `https://savanna-clinic-booking.onrender.com/api/appointments/{id}/reschedule` |
+| 5 | `GET` | `http://localhost:8000/api/patients/{id}/appointments` | `https://savanna-clinic-booking.onrender.com/api/patients/{id}/appointments` |
+
+Every endpoint above is browsable directly - open the URL in any browser
+(DRF renders an HTML form for `POST`/`PATCH` endpoints, with dropdowns for
+doctor/patient) - so testing doesn't require Postman or curl. Recommended
+manual test flow, in order:
+
+1. Seed data first (`python manage.py seed_demo_data` locally, or via
+   Render's **Shell** tab for the deployed instance) so doctor/patient IDs
+   1-5 and 1-2 exist.
+2. `GET .../doctors/1/availability?date=<a future weekday>` - copy a
+   `start_time` from the response.
+3. `POST .../appointments` - book using that `start_time`.
+4. `PATCH .../appointments/{id}/cancel` or `.../reschedule` - using the
+   `id` returned from step 3.
+5. `GET .../patients/1/appointments` - confirm the booking shows up (or
+   doesn't, if cancelled).
+
 ### Run locally
 
 ```bash
-python -m venv venv && source venv/bin/activate
+# 1. Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate        # macOS/Linux
+venv\Scripts\activate            # Windows (Git Bash: source venv/Scripts/activate)
+
+# 2. Install dependencies
 pip install -r requirements.txt
-cp .env.example .env   # edit as needed; unset DB_HOST to use SQLite instead
+
+# 3. Set up environment variables
+cp .env.example .env
+# Leave DB_HOST blank in .env to use SQLite (simplest for local dev/testing).
+# To point locally at the same Supabase database Render uses instead,
+# fill in DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME with the Supabase
+# transaction pooler values (see "Deploying to Render" below).
+
+# 4. Apply migrations
 python manage.py migrate
-python manage.py seed_demo_data   # optional: 5 demo doctors + 2 patients
+
+# 5. (Optional) seed 5 demo doctors + 2 demo patients
+python manage.py seed_demo_data
+
+# 6. Run the dev server
 python manage.py runserver
 ```
 
-Or with Docker (Postgres included):
+App now available at `http://localhost:8000/`.
+
+**Note:** whenever you pull changes that touch `requirements.txt` (e.g. after
+merging in updates), re-run `pip install -r requirements.txt` before running
+any `manage.py` command — a missing package (like `python-dotenv` or
+`whitenoise`) will make Django fail to even load `settings.py`.
+
+Or with Docker (spins up a local Postgres container too):
 
 ```bash
 docker compose up --build
@@ -126,10 +176,10 @@ slot and rescheduling a cancelled appointment).
 
 ## Section 3 — Deployment & CI/CD
 
-- **Deploy target:** [Render](https://render.com) — Docker-based Web Service +
-  managed PostgreSQL instance.
-- **Public URL:** _add here after deploying, the deployed project is at.
-  `https://savanna-clinic-booking.onrender.com`_
+- **Deploy target:** [Render](https://render.com) (Docker-based Web Service)
+  + [Supabase](https://supabase.com) (managed PostgreSQL, via its
+  connection pooler).
+- **Public URL:** https://savanna-clinic-booking.onrender.com
 - **Which branch triggers a deployment:** `main`. Render's own auto-deploy
   (redeploy on every push to `main`) is disabled in favor of the GitHub
   Actions pipeline below, so a deploy only happens *after* tests pass — not
@@ -141,15 +191,23 @@ slot and rescheduling a cancelled appointment).
     deploy hook URL (`RENDER_DEPLOY_HOOK` GitHub secret) to trigger a
     redeploy of the web service.
 
-### Deploying to Render — step by step
+### Deploying to Render + Supabase — step by step
 
 **1. Push the repo to GitHub** (Render deploys from a connected repo).
 
-**2. Create the Postgres database first**
-- Render dashboard → **New +** → **PostgreSQL**
-- Name it (e.g. `clinic-booking-db`), pick a plan, create it
-- Once provisioned, open it and note the connection details under
-  **Connections** — internal host, port, database name, user, password
+**2. Create a Supabase project and get pooler connection details**
+- [supabase.com](https://supabase.com) → **New project** → set a database
+  password (save it, you'll need it below)
+- Once provisioned: **Project Settings** → **Database** → **Connection
+  Pooling**
+- Use the **Transaction pooler** values (not the direct connection) — the
+  direct connection host is IPv6-only on Supabase's free tier, which
+  Render's outbound networking can't reach; the pooler supports IPv4 and
+  suits a stateless web app making short-lived per-request connections:
+  - Host: `aws-0-<region>.pooler.supabase.com`
+  - Port: `6543`
+  - User: `postgres.<your-project-ref>`
+  - Database: `postgres`
 
 **3. Create the Web Service**
 - **New +** → **Web Service** → connect the GitHub repo
@@ -167,12 +225,12 @@ a file in the repo:
 |---|---|
 | `SECRET_KEY` | a freshly generated random string (not the dev default in `settings.py`) |
 | `DEBUG` | `False` |
-| `ALLOWED_HOSTS` | your Render domain, e.g. `clinic-booking-api.onrender.com` |
-| `DB_HOST` | from the database's Connections tab (internal host) |
-| `DB_NAME` | from the database's Connections tab |
-| `DB_USER` | from the database's Connections tab |
-| `DB_PASSWORD` | from the database's Connections tab |
-| `DB_PORT` | `5432` |
+| `ALLOWED_HOSTS` | `savanna-clinic-booking.onrender.com` |
+| `DB_HOST` | Supabase pooler host, e.g. `aws-0-<region>.pooler.supabase.com` |
+| `DB_NAME` | `postgres` |
+| `DB_USER` | `postgres.<your-project-ref>` |
+| `DB_PASSWORD` | your Supabase database password |
+| `DB_PORT` | `6543` |
 
 **5. Deploy**
 - Render builds the Docker image and, per the `Dockerfile`'s `CMD`, runs
@@ -219,13 +277,25 @@ curl/Postman/any HTTP client.
    computation logic, writing the initial test suite, and drafting the
    GitHub Actions workflow and Dockerfile.
 
-2. **Where an AI suggestion improved the work:** I asked it to handle the
-   double-booking race condition ("two patients hit book at the same time
-   for the same slot — how do I guarantee only one wins?"). It suggested
-   moving the guarantee from an application-level `.exists()` check to a
-   database-level partial unique constraint (`UNIQUE(doctor, start_time)
-   WHERE status='booked'`), which is the actual fix — an app-level check
-   alone has a race window between the check and the insert.
+2. **Two examples of AI suggestions that improved the work:**
+
+   - **Preventing double-booking under concurrent requests.** I asked how
+     to guarantee only one of two simultaneous booking requests for the
+     same slot succeeds. The suggestion was to move the guarantee from an
+     application-level `.exists()` check to a database-level partial
+     unique constraint (`UNIQUE(doctor, start_time) WHERE status='booked'`)
+     — the actual fix, since an app-level check alone has a race window
+     between the check and the insert that a concurrent request can slip
+     through.
+
+   - **Diagnosing a production-only styling bug on Render.** After
+     deploying, the DRF browsable API rendered with no CSS at all, even
+     though it looked correct locally. I described the symptom and the AI
+     traced it to `runserver` auto-serving static files in dev while
+     `gunicorn` (used in production) doesn't — so DRF's own Bootstrap
+     CSS/JS was silently 404ing in production. The fix was adding
+     WhiteNoise as static-file middleware plus a `STATIC_ROOT`/`STORAGES`
+     config, which resolved it without needing a separate static file host.
 
 3. **Where AI output was wrong/incomplete and how I caught it:** the first
    draft of the availability logic didn't exclude past time slots on
